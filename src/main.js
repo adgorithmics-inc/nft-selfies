@@ -1,11 +1,46 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef, Fragment } from "react";
 import consts from "./consts";
 import { createRoot } from 'react-dom/client';
 import styled, { createGlobalStyle, css } from 'styled-components'
 import api from "./lib/api";
 import { useStore } from "./store";
-import { useDropzone } from 'react-dropzone'
 import toast, { Toaster } from "react-hot-toast";
+import Webcam from "react-webcam";
+import { QRCodeSVG } from 'qrcode.react';
+
+
+const loadImage = async (dataUrl) => {
+
+    return new Promise((resolve, reject) => {
+
+        const image = new Image();
+        image.src = dataUrl;
+
+        image.addEventListener("load", () => {
+            resolve(image);
+        });
+
+        image.addEventListener("error", reject);
+    });
+
+}
+
+const dataURLtoBlob = (dataurl) => {
+
+    const arr = dataurl.split(',');
+    const mime = arr[0].match(/:(.*?);/)[1];
+    const bstr = atob(arr[1]);
+    let n = bstr.length;
+    const u8arr = new Uint8Array(n);
+
+
+    while (n--) {
+        u8arr[n] = bstr.charCodeAt(n);
+    }
+
+    return new Blob([u8arr], { type: mime });
+
+}
 
 const GlobalStyle = createGlobalStyle`
   *, *::before, *::after {
@@ -23,7 +58,17 @@ const GlobalStyle = createGlobalStyle`
     background-color: ${consts.BACKGROUND_COLOR};
   }
 `
-
+const QRContainer = styled.div`
+    height: 100%;
+    width: 100%;
+    background-color: white;
+    padding: 32px;
+    margin-bottom: 16px;
+    svg {
+        height: 100%;
+        width: 100%;
+    }
+`
 const Container = styled.div`
     height: 100%;
     width: 100%;
@@ -31,6 +76,10 @@ const Container = styled.div`
     margin: 0 auto;
     padding: 32px 32px;
 `;
+
+const PreviewContainer = styled.div`
+    text-align: center;
+`
 
 const Section = styled.div`
     margin-bottom: 16px;
@@ -59,6 +108,7 @@ const ButtonC = styled.button`
     padding: 12px;
     width: 100%;
     border-radius: 4px;
+    margin-bottom: 8px;
     cursor: pointer;
 
     :hover {
@@ -249,7 +299,6 @@ const ContractsView = () => {
                     <Columnar columns={["4fr", "1fr"]}>
                         <div>
                             <Title>{c.name}</Title>
-                            {c.address}
                         </div>
                         <div style={{ "textAlign": "right" }}>
                             <SecondaryButton onClick={() => useContract(c)}>Use</SecondaryButton>
@@ -297,7 +346,6 @@ const ContractView = () => {
                             <SecondaryButton onClick={() => useSeries(s)}>Use</SecondaryButton>
                         </div>
                     </Columnar>
-
                 </Card>
             })}
             {series.length === 0 ? "No series found" : null}
@@ -393,7 +441,6 @@ const CreateSeriesView = () => {
 
         const reqBody = { name, contract: contract.id, private_key: privateKey };
         const res = await api.post("/v2/series/", reqBody)
-        console.log("Res =>", res);
 
     }, [name, privateKey]);
 
@@ -428,62 +475,125 @@ const MintView = () => {
     const [owner, setOwner] = useState("");
     const [image, setImage] = useState(null);
     const [imageBytes, setImageBytes] = useState(null);
+    const [redeemCode, setRedeemCode] = useState(null);
+    const [watermarkSrc, setWatermarkSrc] = useState(null);
 
-    const onDrop = useCallback(acceptedFiles => {
-
-        setImage(acceptedFiles[0]);
-        const file = acceptedFiles[0];
-        const reader = new FileReader();
-        reader.readAsDataURL(file);
-        reader.addEventListener('load', ({ target: { result } }) => {
-            setImageBytes(result)
-        });
-
-    }, [])
-
-    const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop, accept: { 'image/png': [] } })
+    const watermarkRef = useRef(null);
+    const webcamRef = useRef(null);
+    const videoConstraints = {
+        width: 600,
+        height: 600,
+    };
 
     const mint = useCallback(async () => {
 
-        const tokenReqBody = { series: series.id, attributes: [0, 0, 0, 0, 0] };
-        const { code } = await api.put("/v2/tokens/dispense/", tokenReqBody)
-        const { id } = await api.post("/v2/tokens/exchange/", { code, owner });
-        const { status } = await api.get(`/v2/tokens/${id}/`);
+        const form = new FormData();
+        form.append("series", series.id);
+        form.append("attributes[0]", 0);
+        form.append("attributes[1]", 0);
+        form.append("attributes[2]", 0);
+        form.append("attributes[3]", 0);
+        form.append("attributes[4]", 0);
 
-        if (status === "error") {
-            toast.error("Something went wrong minting but we don't know what. Double check your inputs or contact support.");
+        form.append("render", imageBytes, "render.png");
+
+        const { code } = await api.upload("/v2/tokens/dispense/", form);
+        setRedeemCode(code);
+
+    }, [name, owner, imageBytes]);
+
+    const capture = useCallback(async () => {
+
+        const imageSrc = webcamRef.current.getScreenshot();
+
+        const canvas = document.createElement("canvas");
+        const ctx = canvas.getContext("2d");
+        canvas.height = "600";
+        canvas.width = "600";
+
+        const background = await loadImage(imageSrc);
+        const watermark = await loadImage(watermarkSrc);
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(background, 0, 0, 600, 600);
+        ctx.drawImage(watermark, 0, 0, 150, 150);
+
+        const b64 = canvas.toDataURL();
+        setImage(b64);
+        setImageBytes(dataURLtoBlob(b64));
+
+    }, [webcamRef, watermarkSrc]);
+
+    useEffect(() => {
+
+        if (watermarkRef.current === null) {
+            return;
         }
 
+        watermarkRef.current.addEventListener("change", ({ target }) => {
 
-        await api.put(`/v2/tokens/${id}/`, { name });
-        await api.upload(`/v2/tokens/${id}/`, image);
+            const reader = new FileReader();
+            reader.addEventListener("load", ({ target: { result } }) => {
+                setWatermarkSrc(result);
+            });
+            reader.readAsDataURL(target.files[0]);
 
-    }, [name, owner, image]);
+        });
 
+    }, [watermarkRef]);
+
+    let content;
+    if (redeemCode) {
+        content = <Fragment>
+            <QRContainer>
+                <QRCodeSVG value={redeemCode} />
+            </QRContainer>
+            <Button onClick={async () => {
+                setImage(null);
+                setImageBytes(null);
+                setRedeemCode(null);
+            }}>Done</Button>
+        </Fragment>
+    } else {
+        content = <Fragment>
+            {!image && <Webcam
+                width={600}
+                height={600}
+                ref={webcamRef}
+                videoConstraints={videoConstraints}
+                screenshotFormat="image/png"
+                screenshotQuality={1}
+                style={{ width: "100%", heigth: "100%" }}
+                mirrored={true}
+            />}
+            {image && <PreviewContainer>
+                <img src={image} />
+            </PreviewContainer>
+            }
+            {!image ?
+                <Button onClick={async () => {
+                    await capture();
+                }}>Take Picture</Button> :
+                <Fragment>
+                    <Button onClick={async () => {
+                        await mint()
+                    }}>Mint</Button>
+                    <Button onClick={async () => {
+                        setImage(null);
+                        setImageBytes(null);
+                        setRedeemCode(null);
+                    }}>Retake</Button>
+                </Fragment>
+            }
+        </Fragment>
+    }
     return <div>
         <BigTitle>Mint an NFT on {series.name}</BigTitle>
         <Card>
-            <Input
-                label="Name"
-                value={name}
-                onChange={setName} />
-            <Input
-                label="Address"
-                value={owner}
-                onChange={setOwner} />
-
-            {imageBytes === null ?
-                <DragContainer {...getRootProps()}>
-                    <input {...getInputProps()} />
-                    {
-                        isDragActive ?
-                            <p>Drop an image file here ...</p> :
-                            <p>Drop an image here.</p>
-                    }
-                </DragContainer> : <DragContainer><img src={imageBytes} /></DragContainer>}
-            <Button onClick={mint}>Mint</Button>
+            {content}
         </Card>
         <BackButton view="contract" />
+        <input ref={watermarkRef} type="file" placeholder="Set" />
     </div>
 }
 
@@ -536,3 +646,5 @@ const container = document.getElementById('root');
 const root = createRoot(container);
 
 root.render(<App />)
+
+console.log("Starting NFT Selfies")

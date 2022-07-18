@@ -10,10 +10,12 @@
   "license": "ISC",
   "dependencies": {
     "parcel": "^2.6.0",
+    "qrcode.react": "^3.1.0",
     "react": "^18.1.0",
     "react-dom": "^18.1.0",
     "react-dropzone": "^14.2.1",
     "react-hot-toast": "^2.2.0",
+    "react-webcam": "^7.0.1",
     "styled-components": "^5.3.5",
     "zustand": "^4.0.0-rc.1"
   },
